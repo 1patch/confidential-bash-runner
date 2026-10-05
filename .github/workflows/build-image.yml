@@ -1,0 +1,37 @@
+name: Verify and publish generic Bash runner
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: bash-runner-image
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          persist-credentials: false
+      - name: Build pinned runner and test image
+        run: |
+          docker build --build-arg TARGETARCH=amd64 --target bash-test -f deploy/confidential/Dockerfile -t bash-test .
+      - name: Verify real isolation and 100 bounded workspaces
+        run: |
+          docker run --rm --privileged --cgroupns=private --tmpfs /run:rw,nosuid,nodev,size=8g -e CONFIDENTIAL_BASH_LINUX_TEST=1 bash-test
+      - name: Build release image
+        run: |
+          docker build --build-arg TARGETARCH=amd64 --target bash-runtime -f deploy/confidential/Dockerfile -t "ghcr.io/$GITHUB_REPOSITORY:$GITHUB_SHA" .
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified image
+        run: |
+          docker push "ghcr.io/$GITHUB_REPOSITORY:$GITHUB_SHA"
+          docker inspect --format '{{json .RepoDigests}}' "ghcr.io/$GITHUB_REPOSITORY:$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
