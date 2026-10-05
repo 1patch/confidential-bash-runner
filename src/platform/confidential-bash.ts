@@ -322,7 +322,8 @@ export function createConfidentialBash(options: { root: string; rootfs: string; 
         return report;
       } finally { release(); }
     },
-    async execute(tenant: string, command: string, timeout: number, signal: AbortSignal = new AbortController().signal): Promise<ConfidentialBashResult> {
+    async execute(tenant: string, command: string, timeout: number, signal: AbortSignal = new AbortController().signal,
+      beforeDispatch?: () => void): Promise<ConfidentialBashResult> {
       if (!tenantPattern.test(tenant) || !command.trim() || command.includes('\0') || Buffer.byteLength(command) > 16_000
         || !Number.isInteger(timeout) || timeout < 1 || timeout > 60) throw unavailable();
       signal.throwIfAborted();
@@ -391,8 +392,14 @@ export function createConfidentialBash(options: { root: string; rootfs: string; 
         await privateDirectory(bundle);
         await writeFile(join(bundle, 'config.json'), JSON.stringify(confidentialBashSpec(options.rootfs, workspace, timeout, id)), { mode: 0o600 });
         signal.throwIfAborted();
+        // Signed authority may expire while waiting for admission or preparing
+        // the workspace. Recheck synchronously before any dispatch journal.
+        beforeDispatch?.();
         await marker(journal, id);
         dispatched = true;
+        // Fsync itself can outlast the grant. Check again at dispatch; an
+        // elapsed grant here retains uncertainty and cannot return safe busy.
+        beforeDispatch?.();
         let result;
         try { result = await invoke(['run', '--bundle', bundle, id], command, signal, (timeout + 10) * 1000); }
         finally { await stop(id); }
