@@ -1,0 +1,36 @@
+name: Verify measured runtime shape
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Exercise the measured supervisor and Docker healthcheck
+        run: |
+          docker run -d --name bash-compat --privileged --cgroupns=private --memory=12g --pids-limit=512 \
+            --tmpfs /run:rw,nosuid,nodev,size=64m --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -e SURE_BASH_ISSUER_PUBLIC_KEY=MCowBQYDK2VwAyEAEB5kKNQSiAPsdbX8b4A56WionvvVpTqYzzbL2J9km3Y= \
+            --health-cmd='node -e "fetch(\"http://127.0.0.1:8080/healthz\").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"' \
+            --health-interval=2s --health-timeout=5s --health-retries=3 \
+            ghcr.io/1patch/confidential-bash-runner@sha256:aa5d031a920530ee349f4acbb6def0977f11c20c795f9e0e5593cb5e158d0479
+          for attempt in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' bash-compat)
+            if test "$status" = healthy; then exit 0; fi
+            if test "$status" = unhealthy; then break; fi
+            sleep 2
+          done
+          docker inspect --format '{{json .State.Health}}' bash-compat
+          docker logs bash-compat
+          exit 1
+      - name: Remove only this synthetic runtime
+        if: always()
+        run: docker rm -f bash-compat || true
