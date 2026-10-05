@@ -1,0 +1,38 @@
+name: Measure generic Bash configuration
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+concurrency:
+  group: measured-bash-release-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          persist-credentials: false
+      - name: Require immutable release tag and public-only issuer material
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          test "$REF_TYPE" = tag
+          python3 - <<'PY'
+          import base64, pathlib, re
+          text = pathlib.Path('tinfoil-config.yml').read_text()
+          assert 'PRIVATE KEY' not in text and 'REPLACE_' not in text
+          keys = re.findall(r'SURE_BASH_ISSUER_PUBLIC_KEY: "([A-Za-z0-9+/=]+)"', text)
+          assert len(keys) == 1
+          key = base64.b64decode(keys[0], validate=True)
+          assert len(key) == 44 and key[:12].hex() == '302a300506032b6570032100'
+          assert re.search(r'image: ghcr.io/1patch/confidential-bash-runner@sha256:[a-f0-9]{64}', text)
+          PY
+      - uses: tinfoilsh/measure-image-action@c33809b2a4a9ced570ab869765aecd44b4d3cbd5
+        with:
+          config-file: ${{ github.workspace }}/tinfoil-config.yml
+          github-token: ${{ secrets.GITHUB_TOKEN }}

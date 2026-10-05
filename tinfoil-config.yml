@@ -1,0 +1,30 @@
+cvm-version: "0.14.8"
+cpus: 4
+memory: 16384
+
+containers:
+  - name: bash-runner
+    image: ghcr.io/1patch/confidential-bash-runner@sha256:aa5d031a920530ee349f4acbb6def0977f11c20c795f9e0e5593cb5e158d0479
+    # Only the measured supervisor has CVM administration. Tenant commands
+    # enter separate unprivileged gVisor sandboxes with no network or host mounts.
+    cvm_admin: true
+    read_only: false
+    restart: "no"
+    pids_limit: 512
+    memory: "12g"
+    env:
+      - SURE_BASH_ISSUER_PUBLIC_KEY: "MCowBQYDK2VwAyEAEB5kKNQSiAPsdbX8b4A56WionvvVpTqYzzbL2J9km3Y="
+    tmpfs:
+      /run: "rw,nosuid,nodev,mode=755,size=64m"
+      /tmp: "rw,nosuid,nodev,mode=1777,size=64m"
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+shim:
+  upstream-port: 8080
+  paths: [/private]
+  authenticated: false
