@@ -32,7 +32,7 @@ jobs:
           assert len(key) == 44 and key[:12].hex() == '302a300506032b6570032100'
           assert re.search(r'image: ghcr.io/1patch/confidential-bash-runner@sha256:[a-f0-9]{64}', text)
           PY
-      - uses: tinfoilsh/measure-image-action@c33809b2a4a9ced570ab869765aecd44b4d3cbd5
+      - uses: tinfoilsh/measure-image-action@cb61fb5c942ae2d99a9316ada725122bd52faccd
         with:
           config-file: ${{ github.workspace }}/tinfoil-config.yml
           github-token: ${{ secrets.GITHUB_TOKEN }}
