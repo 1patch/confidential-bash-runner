@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { createBashGrantVerifier } from './bash-grant.ts';
 import type { ConfidentialBashResult } from './confidential-bash.ts';
 import { SandboxBusyError } from './sandbox-errors.ts';
@@ -8,7 +9,7 @@ import { AgentCapacityError } from './agent-capacity.ts';
 /** Place behind the enclave's EHBP terminator; never expose this plaintext port. */
 export function createConfidentialBashServer(options: {
   publicKey: string;
-  execute: (tenant: string, command: string, timeout: number, signal: AbortSignal) => Promise<ConfidentialBashResult>;
+  execute: (tenant: string, command: string, timeout: number, signal: AbortSignal, beforeDispatch: () => void) => Promise<ConfidentialBashResult>;
 }) {
   const boot = randomBytes(32).toString('hex');
   const authorize = createBashGrantVerifier(options.publicKey, boot);
@@ -38,7 +39,14 @@ export function createConfidentialBashServer(options: {
         }
         if (keys !== 'command,operation,timeout,token' || body.operation !== 'execute') throw new Error();
         const grant = authorize(body.token, body.command, body.timeout); accepted = true;
-        const result = await options.execute(grant.tenant, body.command, body.timeout, controller.signal);
+        // Queue admission and guest setup can consume most of a grant's life.
+        // A monotonic deadline also prevents a backward wall-clock adjustment
+        // from extending authority while this request waits.
+        const deadline = performance.now() + Math.max(0, grant.expires - Date.now());
+        const result = await options.execute(grant.tenant, body.command, body.timeout, controller.signal, () => {
+          controller.signal.throwIfAborted();
+          if (Date.now() >= grant.expires || performance.now() >= deadline) throw new SandboxBusyError();
+        });
         response.end(JSON.stringify(result));
       } catch (error) {
         // Commands, identities, tokens and child diagnostics never appear here.

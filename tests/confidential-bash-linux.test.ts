@@ -235,6 +235,41 @@ test('bounded retirement slices rotate past quarantined owners without evicting 
   await runtime.close();
 });
 
+test('a queued command rechecks signed authority before creating a dispatch journal', { skip: !enabled }, async () => {
+  const root = '/run/sure-bash-expired-authority'; let time = 6_000_000;
+  const runtime = createConfidentialBash({ root, rootfs: '/opt/sure/rootfs', runsc: '/usr/local/bin/runsc', concurrency: 1, now: () => time });
+  const active = runtime.execute('synthetic-active-authority', 'printf started > started; sleep 2; printf complete', 20);
+  await waitForFile(directoryFor(root, 'synthetic-active-authority') + '/workspace/started', 'started');
+  let beforeDispatchCalls = 0;
+  const tenant = 'synthetic-expired-authority', directory = directoryFor(root, tenant);
+  const pending = runtime.execute(tenant, 'printf must-not-run > executed', 20, new AbortController().signal, () => {
+    beforeDispatchCalls++;
+    // The server supplies this finite failure when its already verified grant
+    // expires during the admission wait. This fixture exercises actual gVisor
+    // admission and preparation rather than executing an expired command.
+    throw new SandboxBusyError();
+  });
+  const rejected = assert.rejects(pending, SandboxBusyError);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(beforeDispatchCalls, 0, 'Authority must be checked after the queued call is admitted');
+  assert.equal(await lstat(directory).catch(() => undefined), undefined);
+  const completed = await active; assert.equal(completed.exitCode, 0, completed.output); assert.equal(completed.output, 'complete');
+  await rejected;
+  assert.equal(beforeDispatchCalls, 1);
+  assert.equal(await lstat(directory + '/execution.json').catch(() => undefined), undefined);
+  assert.equal(await lstat(directory + '/workspace/executed').catch(() => undefined), undefined);
+  assert((await readdir(directory)).some(name => /^sure-/.test(name)), 'The rejection must occur after preparing the workspace');
+  time += confidentialWorkspaceIdleMs;
+  assert.deepEqual(await runtime.retireIdle(), { checked: 2, retired: 2, retained: 0, failed: 0 });
+  const ledger = new DatabaseSync(root + '/tenants.sqlite');
+  try { assert.equal((ledger.prepare('SELECT COUNT(*) AS count FROM tenants').get() as { count: number }).count, 0); }
+  finally { ledger.close(); }
+  assert.equal((await runtime.execute(tenant, 'test ! -e executed; printf fresh', 20, new AbortController().signal,
+    () => { beforeDispatchCalls++; })).output, 'fresh');
+  assert.equal(beforeDispatchCalls, 2);
+  await runtime.close();
+});
+
 test('a crashed supervisor is fenced and its orphaned Bash is stopped before accepting another tenant', { skip: !enabled }, async () => {
   const root = '/run/sure-bash-crash', tenant = 'synthetic-crash';
   const workspace = root + '/tenants/' + createHash('sha256').update(tenant).digest('hex') + '/workspace';
