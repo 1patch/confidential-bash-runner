@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createBashGrantVerifier } from './bash-grant.ts';
 import type { ConfidentialBashResult } from './confidential-bash.ts';
+import { SandboxBusyError } from './sandbox-errors.ts';
+import { AgentCapacityError } from './agent-capacity.ts';
 
 /** Place behind the enclave's EHBP terminator; never expose this plaintext port. */
 export function createConfidentialBashServer(options: {
@@ -16,7 +18,9 @@ export function createConfidentialBashServer(options: {
     response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store');
     if (request.method === 'GET' && request.url === '/healthz') { response.end('{"version":1}'); return; }
     if (request.method !== 'POST' || request.url !== '/private') { response.writeHead(404).end('{}'); return; }
-    if (closing || active.size >= 100) { response.writeHead(503).end('{}'); return; }
+    // This authenticated encrypted body proves that no command was dispatched.
+    // An outer HTTP error alone cannot safely release an uncertainty journal.
+    if (closing || active.size >= 100) { response.end('{"version":1,"busy":true}'); return; }
     const controller = new AbortController();
     response.once('close', () => { if (!response.writableFinished) controller.abort(); });
     const work = (async () => {
@@ -36,9 +40,13 @@ export function createConfidentialBashServer(options: {
         const grant = authorize(body.token, body.command, body.timeout); accepted = true;
         const result = await options.execute(grant.tenant, body.command, body.timeout, controller.signal);
         response.end(JSON.stringify(result));
-      } catch {
+      } catch (error) {
         // Commands, identities, tokens and child diagnostics never appear here.
-        if (!response.destroyed) response.writeHead(accepted ? 503 : 403).end('{}');
+        if (!response.destroyed) {
+          if (accepted && (error instanceof SandboxBusyError || error instanceof AgentCapacityError))
+            response.end('{"version":1,"busy":true}');
+          else response.writeHead(accepted ? 503 : 403).end('{}');
+        }
       } finally { active.delete(controller); }
     })();
     active.set(controller, work);
