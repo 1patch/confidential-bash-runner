@@ -11,8 +11,11 @@ running this image alone does not establish confidential execution.
 
 Limits: 100 temporary workspaces, four concurrent commands, 64 MiB and 8,192
 inodes per workspace; 512 MiB RAM, no swap, one CPU, 64 host tasks and 60 seconds
-per command. Tenant networking is disabled. Files survive commands but disappear
-when the CVM is replaced. Uncertain commands are quarantined and never replayed.
+per command. Tenant networking is disabled. Files survive commands but expire
+after ten minutes idle or when the CVM is replaced. Completed idle workspaces
+are safely unmounted and removed, allowing successive owners beyond the first
+100 while retaining the memory bound. Active or uncertain workspaces are never
+reassigned. Uncertain commands are quarantined and never replayed.
 The coordinator that issues grants can see command inputs and outputs.
 
 The supervisor requires an isolated, privileged container with a private cgroup
