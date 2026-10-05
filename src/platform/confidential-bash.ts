@@ -397,6 +397,9 @@ export function createConfidentialBash(options: { root: string; rootfs: string; 
         beforeDispatch?.();
         await marker(journal, id);
         dispatched = true;
+        // Fsync itself can outlast the grant. Check again at dispatch; an
+        // elapsed grant here retains uncertainty and cannot return safe busy.
+        beforeDispatch?.();
         let result;
         try { result = await invoke(['run', '--bundle', bundle, id], command, signal, (timeout + 10) * 1000); }
         finally { await stop(id); }

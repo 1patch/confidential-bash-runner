@@ -266,7 +266,28 @@ test('a queued command rechecks signed authority before creating a dispatch jour
   finally { ledger.close(); }
   assert.equal((await runtime.execute(tenant, 'test ! -e executed; printf fresh', 20, new AbortController().signal,
     () => { beforeDispatchCalls++; })).output, 'fresh');
-  assert.equal(beforeDispatchCalls, 2);
+  assert.equal(beforeDispatchCalls, 3, 'Fresh authority is checked before journaling and immediately before dispatch');
+  await runtime.close();
+});
+
+test('authority expiring during dispatch journaling stays quarantined and never returns safe busy', { skip: !enabled }, async () => {
+  const root = '/run/sure-bash-expired-journaling'; let time = 7_000_000;
+  const runtime = createConfidentialBash({ root, rootfs: '/opt/sure/rootfs', runsc: '/usr/local/bin/runsc', now: () => time });
+  const tenant = 'synthetic-expired-journaling', directory = directoryFor(root, tenant);
+  let checks = 0;
+  await assert.rejects(runtime.execute(tenant, 'printf must-not-run > executed', 20, new AbortController().signal, () => {
+    if (++checks === 2) throw new SandboxBusyError();
+  }), error => error instanceof Error && !(error instanceof SandboxBusyError) && /unavailable/.test(error.message));
+  assert.equal(checks, 2);
+  assert.equal(await lstat(directory + '/workspace/executed').catch(() => undefined), undefined);
+  const journal = await readFile(directory + '/execution.json', 'utf8');
+  assert.match(JSON.parse(journal).id, /^sure-/);
+  time += confidentialWorkspaceIdleMs;
+  assert.deepEqual(await runtime.retireIdle(), { checked: 1, retired: 0, retained: 1, failed: 0 });
+  assert.equal(await readFile(directory + '/execution.json', 'utf8'), journal);
+  await assert.rejects(runtime.execute(tenant, 'printf replay > executed', 20), /unavailable/);
+  assert.equal(await lstat(directory + '/workspace/executed').catch(() => undefined), undefined);
+  assert.equal(await readFile(directory + '/execution.json', 'utf8'), journal);
   await runtime.close();
 });
 
