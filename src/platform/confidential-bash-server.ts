@@ -12,7 +12,10 @@ export function createConfidentialBashServer(options: {
   execute: (tenant: string, command: string, timeout: number, signal: AbortSignal, beforeDispatch: () => void) => Promise<ConfidentialBashResult>;
 }) {
   const boot = randomBytes(32).toString('hex');
-  const authorize = createBashGrantVerifier(options.publicKey, boot);
+  let validatedAt = NaN;
+  const authorize = createBashGrantVerifier(options.publicKey, boot, () => {
+    const time = Date.now(); validatedAt = time; return time;
+  });
   const active = new Map<AbortController, Promise<void>>();
   let closing = false;
   const server = createServer((request, response) => {
@@ -38,11 +41,16 @@ export function createConfidentialBashServer(options: {
           response.end(JSON.stringify({ version: 1, boot })); return;
         }
         if (keys !== 'command,operation,timeout,token' || body.operation !== 'execute') throw new Error();
-        const grant = authorize(body.token, body.command, body.timeout); accepted = true;
+        const monotonicStart = performance.now();
+        validatedAt = NaN;
+        const grant = authorize(body.token, body.command, body.timeout);
+        // Verification and this copy are synchronous. Each request captures
+        // the exact sample that passed the verifier's rollback/expiry checks.
+        const verifiedWall = validatedAt; accepted = true;
         // Queue admission and guest setup can consume most of a grant's life.
         // A monotonic deadline also prevents a backward wall-clock adjustment
         // from extending authority while this request waits.
-        const deadline = performance.now() + Math.max(0, grant.expires - Date.now());
+        const deadline = monotonicStart + Math.max(0, grant.expires - verifiedWall);
         const result = await options.execute(grant.tenant, body.command, body.timeout, controller.signal, () => {
           controller.signal.throwIfAborted();
           if (Date.now() >= grant.expires || performance.now() >= deadline) throw new SandboxBusyError();
