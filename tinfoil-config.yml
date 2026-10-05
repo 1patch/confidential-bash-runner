@@ -4,7 +4,7 @@ memory: 16384
 
 containers:
   - name: bash-runner
-    image: ghcr.io/1patch/confidential-bash-runner@sha256:aa5d031a920530ee349f4acbb6def0977f11c20c795f9e0e5593cb5e158d0479
+    image: ghcr.io/1patch/confidential-bash-runner@sha256:b63faa5e18818b059cceabb084d7de323218352936c1885893b13660477ba4b7
     # Only the measured supervisor has CVM administration. Tenant commands
     # enter separate unprivileged gVisor sandboxes with no network or host mounts.
     cvm_admin: true
